@@ -1,6 +1,7 @@
 from dataclasses import asdict
 from typing import Annotated
 import logging
+import os
 import time
 from fastmcp import FastMCP
 from pydantic import Field
@@ -9,16 +10,16 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from webwork import WeBWorKManager, load_config
 
-# Basic logger for the MCP server. Callers can reconfigure if they want.
-logger = logging.getLogger("webwork.mcp")
+LOG_LEVEL = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
 if not logging.getLogger().handlers:
     logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+        level=LOG_LEVEL, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
     )
+logging.getLogger("fastmcp").setLevel(LOG_LEVEL)
+logging.getLogger("webwork").setLevel(LOG_LEVEL)
+logger = logging.getLogger("webwork.mcp")
 
-# ---------------------------------------------------------------------------
 # Bootstrap
-# ---------------------------------------------------------------------------
 
 config = load_config()
 manager = WeBWorKManager(config)
@@ -34,36 +35,32 @@ mcp = FastMCP(
     ),
 )
 
-# -- Request logging middleware ------------------------------------------------
 async def _log_requests(request: Request, call_next):
     client = request.client.host if request.client else "unknown"
     logger.info("HTTP %s %s from %s", request.method, request.url.path, client)
     logger.debug("Headers: %s", dict(request.headers))
     start = time.time()
     response = await call_next(request)
-    duration = time.time() - start
     logger.info(
         "Handled %s %s -> %s in %.3fs",
         request.method,
         request.url.path,
         getattr(response, "status_code", "n/a"),
-        duration,
+        time.time() - start,
     )
     return response
 
 
 if hasattr(mcp, "app"):
-    # Attach middleware to underlying ASGI app if available
-    mcp.app.add_middleware(BaseHTTPMiddleware, dispatch=_log_requests)
-    logger.debug("Attached request logging middleware to mcp.app")
+    try:
+        mcp.app.add_middleware(BaseHTTPMiddleware, dispatch=_log_requests)
+        logger.debug("Attached request logging middleware to mcp.app")
+    except Exception as e:
+        logger.warning("Could not attach middleware to mcp.app: %s", e)
 else:
-    logger.debug("FastMCP instance exposes no 'app'; request middleware not attached")
+    logger.debug("mcp.app unavailable; request middleware not attached")
 
-# -- Tool-invocation logging decorator ---------------------------------------
 def log_tool(func):
-    """
-    Decorator to log invocation of a tool. Works for sync and async tool functions.
-    """
     import inspect
     from functools import wraps
 
@@ -75,11 +72,10 @@ def log_tool(func):
             start = time.time()
             try:
                 result = await func(*args, **kwargs)
-                elapsed = time.time() - start
-                logger.info("Tool %s completed in %.3fs", func.__name__, elapsed)
+                logger.info("Tool %s completed in %.3fs", func.__name__, time.time() - start)
                 return result
-            except Exception as exc:
-                logger.exception("Tool %s raised: %s", func.__name__, exc)
+            except Exception:
+                logger.exception("Tool %s raised", func.__name__)
                 raise
 
         return _async_wrapper
@@ -91,14 +87,19 @@ def log_tool(func):
             start = time.time()
             try:
                 result = func(*args, **kwargs)
-                elapsed = time.time() - start
-                logger.info("Tool %s completed in %.3fs", func.__name__, elapsed)
+                logger.info("Tool %s completed in %.3fs", func.__name__, time.time() - start)
                 return result
-            except Exception as exc:
-                logger.exception("Tool %s raised: %s", func.__name__, exc)
+            except Exception:
+                logger.exception("Tool %s raised", func.__name__)
                 raise
 
         return _sync_wrapper
+
+def register_tool(*mcp_args, **mcp_kwargs):
+    def decorator(func):
+        wrapped = log_tool(func)
+        return mcp.tool(*mcp_args, **mcp_kwargs)(wrapped)
+    return decorator
 
 # ---------------------------------------------------------------------------
 # Tools

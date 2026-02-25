@@ -3,6 +3,8 @@ services:
     build: .
     env_file: .env
     environment:
+      # LOG_LEVEL controls verbosity (INFO by default). Use DEBUG for verbose request/tool logs.
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PORT=3000
       - POKE_NAME=${POKE_NAME:-Webwork MCP}
     ports:
