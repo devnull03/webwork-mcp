@@ -53,12 +53,12 @@ def main():
             print(f"  --- Demo: fetching Problem 1 from {demo_set.name} ---\n")
             problem = manager.get_problem(class_name, demo_set.name, 1)
             if problem:
-                print(f"    LaTeX body:\n")
+                print("    LaTeX body:\n")
                 for line in problem.body_latex.splitlines():
                     if line.strip():
                         print(f"      {line}")
                 print()
-                print(f"    Answer fields:")
+                print("    Answer fields:")
                 for af in problem.answer_fields:
                     print(
                         f"      - {af['name']} (type={af['type']}, label={af['label']})"
