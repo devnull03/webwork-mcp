@@ -1,0 +1,13 @@
+services:
+  webwork-mcp:
+    build: .
+    env_file: .env
+    environment:
+      - PORT=3000
+      - POKE_NAME=${POKE_NAME:-Local Dev MCP}
+      - POKE_SHARE=${POKE_SHARE:-}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./.env:/app/.env
+      - ~/.config/poke:/root/.config/poke
