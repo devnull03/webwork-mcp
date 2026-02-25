@@ -4,8 +4,7 @@ services:
     env_file: .env
     environment:
       - PORT=3000
-      - POKE_NAME=${POKE_NAME:-Local Dev MCP}
-      - POKE_SHARE=${POKE_SHARE:-}
+      - POKE_NAME=${POKE_NAME:-Webwork MCP}
     ports:
       - "3000:3000"
     volumes:

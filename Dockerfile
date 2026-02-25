@@ -1,7 +1,7 @@
 FROM python:3.13-slim
 
 # Install curl for Bun install
-RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends unzip curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
@@ -34,4 +34,4 @@ ENV XDG_CONFIG_HOME=/root/.config
 EXPOSE ${PORT}
 
 # Start MCP server in background, then run Poke tunnel (foreground)
-CMD ["/bin/sh", "-c", "uv run fastmcp run server.py:mcp --transport http --port \"${PORT}\" & sleep 3 && exec bunx poke@latest tunnel \"http://127.0.0.1:${PORT}/mcp\" -n \"${POKE_NAME}\" $( [ \"${POKE_SHARE}\" = \"1\" ] || [ \"${POKE_SHARE}\" = \"true\" ] && echo --share )"]
+CMD ["/bin/sh", "-c", "uv run fastmcp run server.py:mcp --transport http --port \"${PORT}\" & sleep 3 && exec bunx poke@latest tunnel \"http://127.0.0.1:${PORT}/mcp\" -n \"${POKE_NAME}\""]
