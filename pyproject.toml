@@ -1,7 +1,7 @@
 [project]
 name = "webwork-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "An MCP server that connects LLMs to WeBWorK online homework systems"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -11,4 +11,3 @@ dependencies = [
     "lxml>=6.0.2",
     "requests>=2.32.5",
 ]
-    
