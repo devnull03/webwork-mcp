@@ -1,10 +1,20 @@
 from dataclasses import asdict
 from typing import Annotated
-
+import logging
+import time
 from fastmcp import FastMCP
 from pydantic import Field
+from starlette.requests import Request
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from webwork import WeBWorKManager, load_config
+
+# Basic logger for the MCP server. Callers can reconfigure if they want.
+logger = logging.getLogger("webwork.mcp")
+if not logging.getLogger().handlers:
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+    )
 
 # ---------------------------------------------------------------------------
 # Bootstrap
@@ -24,6 +34,72 @@ mcp = FastMCP(
     ),
 )
 
+# -- Request logging middleware ------------------------------------------------
+async def _log_requests(request: Request, call_next):
+    client = request.client.host if request.client else "unknown"
+    logger.info("HTTP %s %s from %s", request.method, request.url.path, client)
+    logger.debug("Headers: %s", dict(request.headers))
+    start = time.time()
+    response = await call_next(request)
+    duration = time.time() - start
+    logger.info(
+        "Handled %s %s -> %s in %.3fs",
+        request.method,
+        request.url.path,
+        getattr(response, "status_code", "n/a"),
+        duration,
+    )
+    return response
+
+
+if hasattr(mcp, "app"):
+    # Attach middleware to underlying ASGI app if available
+    mcp.app.add_middleware(BaseHTTPMiddleware, dispatch=_log_requests)
+    logger.debug("Attached request logging middleware to mcp.app")
+else:
+    logger.debug("FastMCP instance exposes no 'app'; request middleware not attached")
+
+# -- Tool-invocation logging decorator ---------------------------------------
+def log_tool(func):
+    """
+    Decorator to log invocation of a tool. Works for sync and async tool functions.
+    """
+    import inspect
+    from functools import wraps
+
+    if inspect.iscoroutinefunction(func):
+
+        @wraps(func)
+        async def _async_wrapper(*args, **kwargs):
+            logger.info("Tool called: %s args=%s kwargs=%s", func.__name__, args, kwargs)
+            start = time.time()
+            try:
+                result = await func(*args, **kwargs)
+                elapsed = time.time() - start
+                logger.info("Tool %s completed in %.3fs", func.__name__, elapsed)
+                return result
+            except Exception as exc:
+                logger.exception("Tool %s raised: %s", func.__name__, exc)
+                raise
+
+        return _async_wrapper
+    else:
+
+        @wraps(func)
+        def _sync_wrapper(*args, **kwargs):
+            logger.info("Tool called: %s args=%s kwargs=%s", func.__name__, args, kwargs)
+            start = time.time()
+            try:
+                result = func(*args, **kwargs)
+                elapsed = time.time() - start
+                logger.info("Tool %s completed in %.3fs", func.__name__, elapsed)
+                return result
+            except Exception as exc:
+                logger.exception("Tool %s raised: %s", func.__name__, exc)
+                raise
+
+        return _sync_wrapper
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -33,12 +109,8 @@ mcp = FastMCP(
     annotations={"readOnlyHint": True},
     tags={"navigation"},
 )
+@log_tool
 def get_classes() -> list[dict[str, str]]:
-    """
-    List all configured WeBWorK classes the user is enrolled in.
-
-    Returns class name, username, and URL for each class.
-    """
     results = []
     for name in manager.get_classes():
         c = manager.client(name)
@@ -56,6 +128,7 @@ def get_classes() -> list[dict[str, str]]:
     annotations={"readOnlyHint": True},
     tags={"navigation"},
 )
+@log_tool
 def get_all_sets(
     class_name: Annotated[
         str, Field(description="The WeBWorK class name, e.g. 'Math221-Vanderlei'")
@@ -74,6 +147,7 @@ def get_all_sets(
     annotations={"readOnlyHint": True},
     tags={"navigation"},
 )
+@log_tool
 def get_open_sets(
     class_name: Annotated[str, Field(description="The WeBWorK class name")],
 ) -> list[dict]:
@@ -90,6 +164,7 @@ def get_open_sets(
     annotations={"readOnlyHint": True},
     tags={"navigation", "deadlines"},
 )
+@log_tool
 def get_due_dates(
     class_name: Annotated[str, Field(description="The WeBWorK class name")],
 ) -> list[dict[str, str]]:
@@ -106,6 +181,7 @@ def get_due_dates(
     annotations={"readOnlyHint": True},
     tags={"navigation", "deadlines"},
 )
+@log_tool
 def get_upcoming_deadlines(
     class_name: Annotated[str, Field(description="The WeBWorK class name")],
 ) -> list[dict[str, str]]:
@@ -123,6 +199,7 @@ def get_upcoming_deadlines(
     annotations={"readOnlyHint": True},
     tags={"problems"},
 )
+@log_tool
 def get_set_info(
     class_name: Annotated[str, Field(description="The WeBWorK class name")],
     set_name: Annotated[
@@ -146,6 +223,7 @@ def get_set_info(
     annotations={"readOnlyHint": True},
     tags={"problems"},
 )
+@log_tool
 def get_problem(
     class_name: Annotated[str, Field(description="The WeBWorK class name")],
     set_name: Annotated[str, Field(description="Exact homework set name")],
@@ -175,6 +253,7 @@ def get_problem(
     annotations={"readOnlyHint": True},
     tags={"grades"},
 )
+@log_tool
 def get_grades(
     class_name: Annotated[str, Field(description="The WeBWorK class name")],
 ) -> list[dict] | str:
@@ -194,6 +273,7 @@ def get_grades(
     annotations={"readOnlyHint": True},
     tags={"problems"},
 )
+@log_tool
 def get_set_progress(
     class_name: Annotated[str, Field(description="The WeBWorK class name")],
     set_name: Annotated[str, Field(description="Exact homework set name")],
@@ -231,6 +311,7 @@ def get_set_progress(
     annotations={"readOnlyHint": True},
     tags={"navigation"},
 )
+@log_tool
 def get_dashboard() -> list[dict]:
     """
     Get a high-level dashboard across ALL classes: open sets,
@@ -265,6 +346,7 @@ def get_dashboard() -> list[dict]:
     annotations={"readOnlyHint": True},
     tags={"navigation", "course"},
 )
+@log_tool
 def get_course_info(
     class_name: Annotated[str, Field(description="The WeBWorK class name")],
 ) -> dict:
@@ -285,6 +367,7 @@ def get_course_info(
     annotations={"readOnlyHint": True},
     tags={"navigation", "course"},
 )
+@log_tool
 def get_all_courses_info() -> list[dict]:
     """
     Get a comprehensive overview of ALL enrolled classes at once.
@@ -304,6 +387,7 @@ def get_all_courses_info() -> list[dict]:
     },
     tags={"problems", "download"},
 )
+@log_tool
 def download_hardcopy(
     class_name: Annotated[str, Field(description="The WeBWorK class name")],
     set_name: Annotated[str, Field(description="Exact homework set name")],

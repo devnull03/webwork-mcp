@@ -26,6 +26,8 @@ RUN uv sync --frozen --no-dev
 ENV PORT=3000
 # Poke tunnel: name shown in Kitchen (default "Local Dev MCP")
 ENV POKE_NAME="Webwork MCP"
+# Default logging level for the application; can be overridden at runtime (e.g. LOG_LEVEL=DEBUG)
+ENV LOG_LEVEL=INFO
 # Set POKE_SHARE=1 or true to create shareable tunnel + QR (--share)
 ENV POKE_SHARE=""
 # Credentials: mount -v ~/.config/poke:/root/.config/poke; .env: --env-file .env or -v $(pwd)/.env:/app/.env

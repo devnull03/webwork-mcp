@@ -1,11 +1,27 @@
 import os
 import re
+import logging
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional, Any, Dict, List
 
 import dotenv
 import requests
 from bs4 import BeautifulSoup, Tag
+
+# Module logger. Callers can configure logging as needed; a helper is provided.
+logger = logging.getLogger(__name__)
+
+
+def configure_logging(level: int = logging.INFO) -> None:
+    """Configure module logging (optional; safe to call from CLI)."""
+    if not logging.getLogger().handlers:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        )
+    logger.setLevel(level)
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -172,31 +188,65 @@ class WeBWorKClient:
         self.class_url = f"{self.base_url}/{self.class_name}"
         self._session = requests.Session()
         self._logged_in = False
+        # Per-instance logger to help when managing multiple class clients.
+        self.logger = logger.getChild(self.class_name)
+        self.logger.debug(
+            "Initialized WeBWorKClient (base_url=%s, username=%s)",
+            self.base_url,
+            self.username,
+        )
 
     # -- lifecycle -----------------------------------------------------------
 
     def login(self) -> bool:
         """Authenticate with WeBWorK. Returns True on success."""
         if self._logged_in:
+            self.logger.debug("Already logged in; skipping login.")
             return True
-        res = self._session.post(
-            self.class_url,
-            data={
-                "user": self.username,
-                "passwd": self.password,
-                ".submit": "Continue",
-            },
+        self.logger.debug("Attempting login to %s as %s", self.class_url, self.username)
+        start = time.time()
+        try:
+            res = self._session.post(
+                self.class_url,
+                data={
+                    "user": self.username,
+                    "passwd": self.password,
+                    ".submit": "Continue",
+                },
+                timeout=30,
+            )
+        except Exception as exc:
+            elapsed = time.time() - start
+            self.logger.warning(
+                "Login POST failed after %.2fs for %s: %s", elapsed, self.class_name, exc
+            )
+            return False
+
+        elapsed = time.time() - start
+        self.logger.debug(
+            "Login POST completed in %.2fs (status_code=%s)",
+            elapsed,
+            getattr(res, "status_code", "n/a"),
         )
+
         soup = BeautifulSoup(res.text, "lxml")
         status = soup.select_one("#loginstatus")
         if status and "Logged in as" in status.get_text():
             self._logged_in = True
+            self.logger.info("Logged in as %s for class %s", self.username, self.class_name)
             return True
+
+        # If we reach here, login did not succeed
+        self.logger.warning("Login failed for %s; loginstatus element missing or unexpected", self.username)
         return False
 
     def _ensure_login(self) -> None:
         if not self._logged_in:
+            self.logger.debug("Not logged in; attempting to login.")
             if not self.login():
+                self.logger.error(
+                    "Failed to log into %s as %s", self.class_name, self.username
+                )
                 raise RuntimeError(
                     f"Failed to log into {self.class_name} as {self.username}"
                 )
@@ -426,9 +476,20 @@ class WeBWorKClient:
         """
         self._ensure_login()
 
+        self.logger.info(
+            "Submitting answers for class=%s set=%s problem=%s",
+            self.class_name,
+            set_name,
+            problem_number,
+        )
+        start = time.time()
+
         # First fetch the problem to get hidden fields
         problem = self.get_problem(set_name, problem_number)
         if problem is None:
+            self.logger.error(
+                "Could not load problem %s from %s for submission", problem_number, set_name
+            )
             return {
                 "success": False,
                 "message": f"Could not load problem {problem_number} from {set_name}.",
@@ -451,7 +512,27 @@ class WeBWorKClient:
             f"?effectiveUser={self.username}"
         )
 
-        res = self._session.post(submit_url, data=payload)
+        try:
+            res = self._session.post(submit_url, data=payload, timeout=30)
+        except Exception as exc:
+            elapsed = time.time() - start
+            self.logger.error(
+                "Submission POST failed after %.2fs for %s/%s: %s",
+                elapsed,
+                set_name,
+                problem_number,
+                exc,
+            )
+            return {"success": False, "message": str(exc), "results": []}
+
+        elapsed = time.time() - start
+        self.logger.debug(
+            "Submission POST completed in %.2fs (status=%s, bytes=%s)",
+            elapsed,
+            getattr(res, "status_code", "n/a"),
+            len(getattr(res, "content", b"")),
+        )
+
         soup = BeautifulSoup(res.text, "lxml")
 
         # Parse results
@@ -481,6 +562,14 @@ class WeBWorKClient:
             all("correct" in r.get("result", "").lower() for r in results)
             if results
             else False
+        )
+
+        self.logger.info(
+            "Submission completed for %s #%s: success=%s message=%s",
+            set_name,
+            problem_number,
+            all_correct,
+            message_text or score_text,
         )
 
         return {
