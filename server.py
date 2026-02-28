@@ -426,4 +426,10 @@ def download_hardcopy(
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    mcp.run()
+    import os
+    
+    if os.getenv("ENV") == "PROD":
+        mcp.run(transport="http", host=os.getenv("HOST", "0.0.0.0"), port=os.getenv("PORT", 8000))
+    else:
+        mcp.run()
+    

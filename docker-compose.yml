@@ -1,12 +1,31 @@
 services:
   webwork-mcp:
+    container_name: webwork-mcp
     build: .
     env_file: .env
     environment:
+      # TUNNEL_MODE controls whether the container starts a poke tunnel.
+      # Set to "poke" to start the bunx poke tunnel from the container.
+      # Any other value (or unset) will run the server normally; use the separate
+      # cloudflared service in this compose file if you want an external tunnel.
+      - TUNNEL_MODE=${TUNNEL_MODE:-}
       # LOG_LEVEL controls verbosity (INFO by default). Use DEBUG for verbose request/tool logs.
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PORT=9814
+      - HOST=0.0.0.0
       - POKE_NAME=${POKE_NAME:-Webwork MCP}
+      - ENV=PROD
     volumes:
       - ./.env:/app/.env
       - ~/.config/poke:/root/.config/poke
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: webwork-cloudflared
+    restart: unless-stopped
+    network_mode: "service:webwork-mcp"
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    env_file: .env
+    depends_on:
+      - webwork-mcp

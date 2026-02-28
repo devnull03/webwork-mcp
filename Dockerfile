@@ -35,5 +35,6 @@ ENV XDG_CONFIG_HOME=/root/.config
 
 EXPOSE ${PORT}
 
-# Start MCP server in background, then run Poke tunnel (foreground)
-CMD ["/bin/sh", "-c", "uv run fastmcp run server.py:mcp --transport http --port \"${PORT}\" & sleep 3 && exec bunx poke@latest tunnel \"http://127.0.0.1:${PORT}/mcp\" -n \"${POKE_NAME}\""]
+# Start MCP server; if TUNNEL_MODE is "poke" start the server in background and run bunx poke tunnel,
+# otherwise run the server in the foreground (no poke tunnel).
+CMD ["/bin/sh", "-c", "if [ \"${TUNNEL_MODE}\" = \"poke\" ]; then uv run fastmcp run server.py:mcp --transport http --port \"${PORT}\" & sleep 3 && exec bunx poke@latest tunnel \"http://127.0.0.1:${PORT}/mcp\" -n \"${POKE_NAME}\"; else exec uv run fastmcp run server.py:mcp --transport http --port \"${PORT}\"; fi"]
