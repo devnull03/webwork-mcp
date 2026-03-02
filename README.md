@@ -155,96 +155,135 @@ This logs into all configured classes, lists sets, shows progress for open assig
 
 ## Docker
 
-The image runs the MCP server and a [Poke](https://poke.com) tunnel in one container, so the server is exposed via Poke without a second process.
+Three Dockerfiles are provided. Pick the one that matches how you want to expose the server — you only need one at a time:
+
+| File | What it runs |
+|---|---|
+| `Dockerfile` | MCP server only (no tunnel) |
+| `Dockerfile.poke` | MCP server + [Poke](https://poke.com) tunnel |
+| `Dockerfile.cloudflared` | MCP server + Cloudflare Tunnel |
+
+`Dockerfile` is the base image — the MCP server with nothing else. `Dockerfile.poke` and `Dockerfile.cloudflared` build on top of it, so **the base must be built first**.
 
 ### Build
 
 ```sh
-docker build -t webwork-mcp .
+# 1. base — always build this first
+docker build -t webwork-mcp:latest .
+
+# 2a. poke variant
+docker build -f Dockerfile.poke -t webwork-mcp:poke .
+
+# 2b. cloudflared variant
+docker build -f Dockerfile.cloudflared -t webwork-mcp:cloudflared .
 ```
 
-### Volume binds
+### MCP server only (no tunnel)
 
-- **`.env`** — Use `--env-file .env` or bind the file so the app can read WeBWorK config:
-  ```sh
-  -v "$(pwd)/.env:/app/.env"
-  ```
-- **Poke credentials** — Poke stores credentials in `~/.config/poke/credentials.json` (or `$XDG_CONFIG_HOME/poke/credentials.json`). Mount the host config dir so the container can reuse your login and persist new ones:
-  ```sh
-  -v "$HOME/.config/poke:/root/.config/poke"
-  ```
+Useful when you want to tunnel from the host or connect a local client directly.
 
-### Run (MCP + Poke tunnel)
+```sh
+docker run --rm \
+  --env-file .env \
+  -p 9814:9814 \
+  webwork-mcp:latest
+```
+
+The MCP endpoint will be at `http://localhost:9814/mcp`.
+
+### With Poke tunnel
+
+Poke stores credentials in `~/.config/poke/credentials.json`. Mount that directory so the container can reuse your login and persist new ones.
 
 ```sh
 docker run --rm \
   --env-file .env \
   -v "$HOME/.config/poke:/root/.config/poke" \
-  -p 3000:3000 \
-  webwork-mcp
+  webwork-mcp:poke
 ```
 
-The container starts the MCP server, then runs `bunx poke@latest tunnel http://localhost:3000/mcp -n "Local Dev MCP"`. The tunnel stays in the foreground; when it exits, the container exits.
+The container starts the MCP server, waits a few seconds, then runs `bunx poke@latest tunnel`. The tunnel stays in the foreground; when it exits, the container exits.
 
-### Shareable tunnel (recipe link + QR code)
-
-Set `POKE_SHARE=1` to create a shareable connection and print a recipe link and QR code in the terminal:
+**Shareable tunnel** (recipe link + QR code):
 
 ```sh
 docker run --rm \
   --env-file .env \
   -v "$HOME/.config/poke:/root/.config/poke" \
-  -p 3000:3000 \
   -e POKE_SHARE=1 \
-  webwork-mcp
+  webwork-mcp:poke
 ```
 
-### Options
+**Poke options:**
 
-| Variable     | Default            | Description                          |
-|-------------|--------------------|--------------------------------------|
-| `PORT`      | `3000`             | MCP HTTP server port                 |
-| `POKE_NAME` | `Local Dev MCP`    | Name shown in Poke Kitchen           |
-| `POKE_SHARE`| *(unset)*          | Set to `1` or `true` to use `--share` |
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `9814` | MCP HTTP server port |
+| `POKE_NAME` | `Webwork MCP` | Name shown in Poke Kitchen |
+| `POKE_SHARE` | *(unset)* | Set to `1` or `true` to use `--share` |
 
-### Custom port
+### With Cloudflare Tunnel
+
+Requires a Cloudflare Tunnel token. Get one from the [Cloudflare Zero Trust dashboard](https://one.dash.cloudflare.com/) under **Networks → Tunnels**.
 
 ```sh
-docker run --rm --env-file .env -v "$HOME/.config/poke:/root/.config/poke" -e PORT=8080 -p 8080:8080 webwork-mcp
+docker run --rm \
+  --env-file .env \
+  -e TUNNEL_TOKEN=your_token_here \
+  webwork-mcp:cloudflared
 ```
+
+The container starts the MCP server, waits a few seconds, then runs `cloudflared tunnel run`. The tunnel stays in the foreground; when it exits, the container exits.
+
+**Cloudflared options:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `9814` | MCP HTTP server port |
+| `TUNNEL_TOKEN` | *(required)* | Cloudflare Tunnel token |
 
 ### Docker Compose
 
-```sh
-docker compose up --build
-```
-
-Uses `docker-compose.yml`: builds the image, loads `.env`, mounts `~/.config/poke` for Poke credentials, and publishes port 3000. For a shareable tunnel, run with `POKE_SHARE=1 docker compose up --build`.
-
-### Run only the MCP server (no tunnel)
-
-To run the HTTP server only and tunnel from the host (or another container):
+`docker-compose.yml` defines two named services — `poke` and `cloudflared`. Since both depend on the base image, build it first, then start whichever service you need:
 
 ```sh
-docker run --rm --env-file .env -p 3000:3000 --entrypoint "" webwork-mcp \
-  uv run fastmcp run server.py:mcp --transport http --port 3000
+# 1. build the base image
+docker build -t webwork-mcp:latest .
+
+# 2a. run with Poke tunnel
+docker compose up poke
+
+# 2b. run with Cloudflare Tunnel
+docker compose up cloudflared
 ```
 
-Then on the host: `npx poke@latest tunnel http://localhost:3000/mcp -n "WeBWorK MCP"`.
+On the first run or after code changes, rebuild the relevant image alongside:
+
+```sh
+# rebuild base then start poke
+docker build -t webwork-mcp:latest . && docker compose up poke --build
+
+# rebuild base then start cloudflared
+docker build -t webwork-mcp:latest . && docker compose up cloudflared --build
+```
+
+The compose file loads `.env` automatically, so you can put `TUNNEL_TOKEN`, `POKE_NAME`, etc. there instead of passing them inline.
 
 ## Project structure
 
 ```
 webwork-mcp/
-├── server.py        # FastMCP server — exposes tools to LLM clients
-├── webwork.py       # WeBWorK client library — scraping and parsing
-├── main.py          # CLI test script
-├── Dockerfile
+├── server.py                # FastMCP server — exposes tools to LLM clients
+├── webwork.py               # WeBWorK client library — scraping and parsing
+├── main.py                  # CLI test script
+├── Dockerfile               # Base image — MCP server only
+├── Dockerfile.poke          # MCP server + Poke tunnel
+├── Dockerfile.cloudflared   # MCP server + Cloudflare Tunnel
 ├── docker-compose.yml
 ├── .dockerignore
 ├── pyproject.toml
 ├── uv.lock
-└── .env             # Your credentials (not committed)
+└── .env                     # Your credentials (not committed)
 ```
 
 ## Architecture

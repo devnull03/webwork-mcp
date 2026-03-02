@@ -1,0 +1,27 @@
+FROM webwork-mcp:latest
+
+RUN apt-get update && apt-get install -y --no-install-recommends curl unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Bun
+ENV BUN_INSTALL=/usr/local
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/usr/local/bin:${PATH}"
+
+# Poke tunnel: name shown in Kitchen
+ENV POKE_NAME="Webwork MCP"
+# Set POKE_SHARE=1 or true to create a shareable tunnel + QR (--share)
+ENV POKE_SHARE=""
+# Credentials: mount -v ~/.config/poke:/root/.config/poke
+ENV XDG_CONFIG_HOME=/root/.config
+
+EXPOSE ${PORT}
+
+# Start the MCP server in the background, wait for it to be ready, then launch the poke tunnel
+CMD ["sh", "-c", "\
+  uv run fastmcp run server.py:mcp --transport http --host ${HOST} --port ${PORT} & \
+  sleep 3 && \
+  exec bunx poke@latest tunnel \"http://127.0.0.1:${PORT}/mcp\" \
+    -n \"${POKE_NAME}\" \
+    ${POKE_SHARE:+--share} \
+"]
