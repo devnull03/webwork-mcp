@@ -1,6 +1,6 @@
+import logging
 import os
 import re
-import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,6 +21,7 @@ def configure_logging(level: int = logging.INFO) -> None:
             format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         )
     logger.setLevel(level)
+
 
 # ---------------------------------------------------------------------------
 # Data models
@@ -106,13 +107,11 @@ def load_config() -> WwConfig:
 # Helpers
 # ---------------------------------------------------------------------------
 
-_BASE_URL = "https://webwork.ufv.ca"
 
-
-def _full_url(href: str) -> str:
+def _full_url(base_url: str, href: str) -> str:
     if href.startswith("http"):
         return href
-    return f"{_BASE_URL}{href}"
+    return f"{base_url}{href}"
 
 
 def _extract_due_date(status_text: str) -> str:
@@ -217,7 +216,10 @@ class WeBWorKClient:
         except Exception as exc:
             elapsed = time.time() - start
             self.logger.warning(
-                "Login POST failed after %.2fs for %s: %s", elapsed, self.class_name, exc
+                "Login POST failed after %.2fs for %s: %s",
+                elapsed,
+                self.class_name,
+                exc,
             )
             return False
 
@@ -232,11 +234,16 @@ class WeBWorKClient:
         status = soup.select_one("#loginstatus")
         if status and "Logged in as" in status.get_text():
             self._logged_in = True
-            self.logger.info("Logged in as %s for class %s", self.username, self.class_name)
+            self.logger.info(
+                "Logged in as %s for class %s", self.username, self.class_name
+            )
             return True
 
         # If we reach here, login did not succeed
-        self.logger.warning("Login failed for %s; loginstatus element missing or unexpected", self.username)
+        self.logger.warning(
+            "Login failed for %s; loginstatus element missing or unexpected",
+            self.username,
+        )
         return False
 
     def _ensure_login(self) -> None:
@@ -277,7 +284,12 @@ class WeBWorKClient:
             due = _extract_due_date(status)
 
             sets.append(
-                HomeworkSet(name=name, url=_full_url(href), status=status, due_date=due)
+                HomeworkSet(
+                    name=name,
+                    url=_full_url(self.base_url, href),
+                    status=status,
+                    due_date=due,
+                )
             )
         return sets
 
@@ -331,7 +343,7 @@ class WeBWorKClient:
                 Problem(
                     number=num,
                     name=name,
-                    url=_full_url(href),
+                    url=_full_url(self.base_url, href),
                     attempts=int(attempts_text) if attempts_text.isdigit() else 0,
                     remaining=remaining,
                     worth=int(worth_text) if worth_text.isdigit() else 0,
@@ -487,7 +499,9 @@ class WeBWorKClient:
         problem = self.get_problem(set_name, problem_number)
         if problem is None:
             self.logger.error(
-                "Could not load problem %s from %s for submission", problem_number, set_name
+                "Could not load problem %s from %s for submission",
+                problem_number,
+                set_name,
             )
             return {
                 "success": False,
@@ -802,7 +816,7 @@ class WeBWorKClient:
 
         # POST to generate the PDF
         action = str(form.get("action", ""))
-        post_url = _full_url(action) if action else hc_page_url
+        post_url = _full_url(self.base_url, action) if action else hc_page_url
         res2 = self._session.post(post_url, data=payload)
 
         content_type = res2.headers.get("Content-Type", "")
